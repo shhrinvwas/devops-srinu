@@ -1,0 +1,80 @@
+import requests
+from azure.devops.connection import Connection
+from msrest.authentication import BasicAuthentication
+
+# Replace these values with your Azure DevOps organization and personal access token
+organization_url = "<INSERT REPO URL>"
+personal_access_token = "<INSERT TOKEN>"
+
+# Create a connection to Azure DevOps
+credentials = BasicAuthentication('', personal_access_token)
+connection = Connection(base_url=organization_url, creds=credentials)
+
+async def run():
+    constructed_teams = {}
+    try:
+        # Get the Core API client
+        core_client = connection.clients_v6_0.get_core_client()
+
+        # Get all teams in the organization
+        teams = await core_client.get_teams()
+        
+        for team in teams:
+            team_id = team.id
+            project_name = team.project_name
+            team_name = team.name
+
+            obj = {
+                'url': team.url,
+                'projectId': project_name,
+                'teamName': team_name,
+                'teamId': team_id
+            }
+
+            if project_name not in constructed_teams:
+                constructed_teams[project_name] = [obj]
+            else:
+                constructed_teams[project_name].append(obj)
+
+        teams_to_use = constructed_teams
+        final_construct = await construct_teams(teams_to_use)
+        return final_construct
+
+    except Exception as err:
+        print(f"Error: {err}")
+
+async def construct_teams(teams):
+    obj = {}
+    
+    for key, team_list in teams.items():
+        for el in team_list:
+            temp = {}
+            project_id = el['projectId']
+            team_id = el['teamId']
+            url = f"https://dev.azure.com/{organization_url}/{project_id}/_apis/securitynamespaces/teamsecuritynamespace/{team_id}?__v=5"
+            
+            response = requests.get(url)
+            if response.status_code == 200:
+                parsed_body = response.json()
+                if parsed_body and 'security' in parsed_body and 'permissions' in parsed_body['security']:
+                    del parsed_body['security']
+                    print(f"Permissions: {parsed_body}")
+                else:
+                    print("Permissions not found")
+
+            members = await connection.clients_v6_0.get_teams().get_team_members(project_id, team_id)
+            name_members = ', '.join(member.identity.display_name for member in members)
+            temp[el['teamName']] = name_members
+
+            if key not in obj or not obj[key]:
+                obj[key] = temp
+            else:
+                obj[key].update(temp)
+
+    print(f"Org: {obj}")
+    return obj
+
+if __name__ == "__main__":
+    import asyncio
+    loop = asyncio.get_event_loop()
+    result = loop.run_until_complete(run())
